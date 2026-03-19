@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.db
+*.sqlite
+logs/
+*.png
+*.jpg
+*.jpeg
+map_screen_debug.*
+last_screenshot.*
+ui_cache.json
+.vscode/
+.idea/

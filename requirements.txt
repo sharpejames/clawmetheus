@@ -1,0 +1,12 @@
+fastapi>=0.100.0
+uvicorn>=0.20.0
+mss>=9.0.0
+pyautogui>=0.9.54
+pyperclip>=1.8.0
+pillow>=10.0.0
+httpx>=0.27.0
+opencv-python>=4.8.0
+pytesseract>=0.3.10
+pywinauto>=0.6.8; sys_platform == "win32"
+atomacos>=0.4.0; sys_platform == "darwin"
+moondream
