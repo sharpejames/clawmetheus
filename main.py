@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+﻿from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional, Any
@@ -23,12 +23,12 @@ app = FastAPI(title="Clawmetheus", version="2.0")
 
 # Speed: no pause between actions
 pyautogui.PAUSE = 0
-pyautogui.FAILSAFE = False  # Disabled — corner trigger breaks automation
+pyautogui.FAILSAFE = False  # Disabled â€” corner trigger breaks automation
 pyautogui.MINIMUM_DURATION = 0  # Allow sub-0.1s moves for faster drawing
 
 _SYSTEM = _platform.system()
 
-# Screen dimensions — cross-platform
+# Screen dimensions â€” cross-platform
 if _SYSTEM == "Windows":
     import ctypes
     user32 = ctypes.windll.user32
@@ -48,7 +48,7 @@ def _get_perception():
     if _perception is None:
         sys.path.insert(0, os.path.dirname(__file__))
         from perception import PerceptionLayer
-        _perception = PerceptionLayer(gemini_fn=lambda q, img: vision.ask(img, q))
+        _perception = PerceptionLayer(gemini_fn=lambda q, img: moondream_vision.ask(img, q))
     return _perception
 
 # Key name normalization
@@ -66,7 +66,7 @@ def map_key(k: str) -> str:
 
 
 def _grab_screenshot(scale: float) -> tuple[str, int, int]:
-    """Grab screen → (base64_jpeg, img_w, img_h)."""
+    """Grab screen â†’ (base64_jpeg, img_w, img_h)."""
     with mss.mss() as sct:
         monitor = sct.monitors[1]
         raw = sct.grab(monitor)
@@ -109,7 +109,7 @@ def _b64_from_image(img: Image.Image) -> str:
     return base64.b64encode(buf.getvalue()).decode()
 
 
-# ── Endpoints ──────────────────────────────────────────────────────────────────
+# â”€â”€ Endpoints â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 @app.get("/status")
 def status():
@@ -134,7 +134,7 @@ def screenshot_grid(scale: float = 0.5, spacing: int = 100):
 
 @app.get("/screenshot/window")
 def screenshot_window(title: str, scale: float = 1.0):
-    """Capture a specific window by title using PrintWindow — works even if not in foreground."""
+    """Capture a specific window by title using PrintWindow â€” works even if not in foreground."""
     gdi32 = ctypes.windll.gdi32
 
     found = []
@@ -212,7 +212,7 @@ def cursor():
     return {"x": x, "y": y}
 
 
-# ── Unicode typing via SendInput (Windows) ────────────────────────────────────
+# â”€â”€ Unicode typing via SendInput (Windows) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 if _SYSTEM == "Windows":
     import ctypes.wintypes
@@ -236,7 +236,7 @@ if _SYSTEM == "Windows":
     INPUT_KEYBOARD = 1
 
     def _send_unicode_char(ch):
-        """Type a single Unicode character via SendInput — no clipboard needed."""
+        """Type a single Unicode character via SendInput â€” no clipboard needed."""
         code = ord(ch)
         inputs = (INPUT * 2)()
         # Key down
@@ -252,7 +252,7 @@ if _SYSTEM == "Windows":
         ctypes.windll.user32.SendInput(2, ctypes.byref(inputs), ctypes.sizeof(INPUT))
 
 
-# ── Action execution ───────────────────────────────────────────────────────────
+# â”€â”€ Action execution â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _execute(action: dict):
     t = action.get("type", "")
@@ -273,7 +273,7 @@ def _execute(action: dict):
         pyautogui.hotkey("ctrl", "v")
 
     elif t == "typeKeys":
-        # Type via keyboard events — does NOT touch clipboard.
+        # Type via keyboard events â€” does NOT touch clipboard.
         # Use this when clipboard contains data you need to preserve (e.g. DOM data).
         text = action.get("text", "")
         interval = action.get("interval", 0.01)
@@ -283,10 +283,10 @@ def _execute(action: dict):
             elif ch == '\t':
                 pyautogui.press('tab')
             elif ord(ch) < 128:
-                # ASCII — use typewrite for speed
+                # ASCII â€” use typewrite for speed
                 pyautogui.typewrite(ch, interval=0)
             else:
-                # Unicode — use Win32 SendInput with KEYEVENTF_UNICODE
+                # Unicode â€” use Win32 SendInput with KEYEVENTF_UNICODE
                 if _SYSTEM == "Windows":
                     _send_unicode_char(ch)
                 else:
@@ -321,16 +321,47 @@ def _execute(action: dict):
         button = action.get("button", "left")
         if len(points) < 2:
             return
-        pyautogui.moveTo(points[0]["x"], points[0]["y"])
-        time.sleep(0.05)  # Let the move complete
-        pyautogui.mouseDown(button=button)
-        time.sleep(0.05)  # Critical: let Windows register the mouseDown
+        # Use Win32 mouse_event for reliable drawing in UWP/WinUI3 apps (new Paint).
+        # pyautogui mouseDown+moveTo doesn't register as drawing in some modern apps.
+        import ctypes
+
+        MOUSEEVENTF_MOVE = 0x0001
+        MOUSEEVENTF_LEFTDOWN = 0x0002
+        MOUSEEVENTF_LEFTUP = 0x0004
+        MOUSEEVENTF_RIGHTDOWN = 0x0008
+        MOUSEEVENTF_RIGHTUP = 0x0010
+        MOUSEEVENTF_ABSOLUTE = 0x8000
+
+        me = ctypes.windll.user32.mouse_event
+
+        def _abs_xy(sx, sy):
+            return int(sx * 65536 / SCREEN_W), int(sy * 65536 / SCREEN_H)
+
+        down_flag = MOUSEEVENTF_LEFTDOWN if button == "left" else MOUSEEVENTF_RIGHTDOWN
+        up_flag = MOUSEEVENTF_LEFTUP if button == "left" else MOUSEEVENTF_RIGHTUP
+
+        # Move to start point
+        ax, ay = _abs_xy(points[0]["x"], points[0]["y"])
+        me(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, ax, ay, 0, 0)
+        time.sleep(0.06)
+
+        # Press button down at start point
+        me(down_flag | MOUSEEVENTF_ABSOLUTE, ax, ay, 0, 0)
+        time.sleep(0.06)
+
+        # Drag through all points — each move includes MOVE flag while button stays held
         for i in range(1, len(points)):
-            p, prev = points[i], points[i - 1]
+            p = points[i]
+            prev = points[i - 1]
             dist = math.sqrt((p["x"] - prev["x"]) ** 2 + (p["y"] - prev["y"]) ** 2)
-            # 0.02s minimum — fast but smooth. pyautogui.MINIMUM_DURATION is set to 0 at top.
-            pyautogui.moveTo(p["x"], p["y"], duration=max(dist / speed, 0.02))
-        pyautogui.mouseUp(button=button)
+            ax, ay = _abs_xy(p["x"], p["y"])
+            me(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE, ax, ay, 0, 0)
+            delay = max(dist / speed, 0.005) if speed > 0 else 0.005
+            time.sleep(delay)
+
+        # Release button
+        ax, ay = _abs_xy(points[-1]["x"], points[-1]["y"])
+        me(up_flag | MOUSEEVENTF_ABSOLUTE, ax, ay, 0, 0)
 
     elif t == "wait":
         time.sleep(action.get("ms", 1000) / 1000)
@@ -370,13 +401,13 @@ def action(req: ActionRequest):
 
 @app.get("/perceive")
 def perceive(scale: float = 0.5, task: str = ""):
-    """Screenshot with grid overlay → Gemini → structured element map with actual screen coords."""
+    """Screenshot with grid overlay â†’ Gemini â†’ structured element map with actual screen coords."""
     b64, w, h = _grab_screenshot(scale)
     img = Image.open(io.BytesIO(base64.b64decode(b64)))
     img = _add_grid_overlay(img, scale=scale, spacing=100)
     grid_b64 = _b64_from_image(img)
     try:
-        result = vision.perceive(grid_b64, scale=scale, task=task)
+        result = moondream_vision.perceive(grid_b64, scale=scale, task=task)
     except Exception as e:
         img.save(os.path.join(os.path.dirname(__file__), "map_screen_debug.png"))
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
@@ -390,11 +421,7 @@ def ask_screen(q: str, scale: float = 0.5):
     try:
         answer = moondream_vision.ask(b64, q)
     except Exception as e:
-        # Fallback to Gemini if moondream fails
-        try:
-            answer = vision.ask(b64, q)
-        except Exception as e2:
-            return JSONResponse(status_code=500, content={"ok": False, "error": str(e2)})
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
     return {"ok": True, "answer": answer}
 
 
@@ -436,7 +463,7 @@ def perceive_fast(q: str, region: str = ""):
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
-# ── DOM result exchange (for DevTools fallback) ───────────────────────────────
+# â”€â”€ DOM result exchange (for DevTools fallback) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 # Browser JS sends DOM query results here via fetch(); Python reads them back.
 # This avoids clipboard corruption that killed the original DevTools approach.
 
@@ -503,6 +530,34 @@ def state():
             "active_window": active_window, "processes": procs}
 
 
+
+@app.get("/window_rect")
+def window_rect(title: str):
+    """Get window rect by title substring. Returns left/top/right/bottom/title or 404."""
+    user32 = ctypes.windll.user32
+    found = []
+    def _cb(hwnd, _):
+        if user32.IsWindowVisible(hwnd):
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                wt = buf.value
+                if title.lower() in wt.lower():
+                    class RECT(ctypes.Structure):
+                        _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                                    ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+                    r = RECT()
+                    user32.GetWindowRect(hwnd, ctypes.byref(r))
+                    found.append({"left": r.left, "top": r.top, "right": r.right,
+                                  "bottom": r.bottom, "title": wt, "pid": 0})
+        return True
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_int))
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)
+    if found:
+        return {"ok": True, **found[0]}
+    return JSONResponse(status_code=404, content={"ok": False, "error": f"Window \"{title}\" not found"})
+
 @app.get("/focus")
 def focus(app_name: str):
     """Ensure an app is open and in the foreground. Restores if minimized, opens if not running."""
@@ -524,7 +579,7 @@ def focus(app_name: str):
 
     if found_hwnd:
         hwnd = found_hwnd[0]
-        # Only restore if minimized — SW_RESTORE un-maximizes, which breaks coords
+        # Only restore if minimized â€” SW_RESTORE un-maximizes, which breaks coords
         SW_SHOW = 5
         if user32.IsIconic(hwnd):
             user32.ShowWindow(hwnd, SW_RESTORE)
@@ -557,5 +612,5 @@ def kill():
 
 if __name__ == "__main__":
     import uvicorn
-    print(f"Clawmetheus v2 — screen {SCREEN_W}x{SCREEN_H} — http://127.0.0.1:7331")
+    print(f"Clawmetheus v2 â€” screen {SCREEN_W}x{SCREEN_H} â€” http://127.0.0.1:7331")
     uvicorn.run(app, host="127.0.0.1", port=7331, log_level="warning")

@@ -1,11 +1,14 @@
 """
-Moondream cloud vision backend — fast, no rate limit issues.
-API key loaded from MOONDREAM_API_KEY env var (set in .env via start.ps1).
+Moondream 2 — fully local vision backend via Hugging Face Transformers.
+No API key required. Runs on GPU (CUDA) with ~2GB VRAM.
 """
 import io
-import os
 import base64
 import logging
+import re
+import json
+
+import torch
 from PIL import Image
 
 logger = logging.getLogger(__name__)
@@ -16,12 +19,16 @@ _model = None
 def _get_model():
     global _model
     if _model is None:
-        import moondream as md
-        api_key = os.environ.get("MOONDREAM_API_KEY", "")
-        if not api_key:
-            raise RuntimeError("MOONDREAM_API_KEY not set — check .env and use start.ps1")
-        _model = md.vl(api_key=api_key)
-        logger.info("Moondream cloud model ready.")
+        from transformers import AutoModelForCausalLM
+
+        logger.info("Loading Moondream 2 locally (this may download ~2GB on first run)...")
+        _model = AutoModelForCausalLM.from_pretrained(
+            "vikhyatk/moondream2",
+            trust_remote_code=True,
+            dtype=torch.bfloat16,
+            device_map="cuda",
+        )
+        logger.info("Moondream 2 loaded on CUDA.")
     return _model
 
 
@@ -42,7 +49,6 @@ def perceive(image_b64: str, scale: float, task: str = "") -> dict:
     Structured element map using Moondream query(). Replaces Gemini /perceive.
     Coordinates are scaled back to actual screen pixels.
     """
-    import re, json
     model = _get_model()
     img = _load_image(image_b64)
 
@@ -91,6 +97,7 @@ Include every clickable element. Up to 75 elements."""
 def point(image_b64: str, target: str, scale: float = 0.5) -> tuple[int, int]:
     """
     Find a UI element by description. Returns (x, y) in actual screen coords.
+    Uses Moondream's native point() which returns normalized coords.
     Returns (0, 0) if not found.
     """
     model = _get_model()
