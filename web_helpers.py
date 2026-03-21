@@ -252,23 +252,17 @@ def close_devtools():
 
 def _devtools_eval(js_code):
     """
-    Execute JS via DevTools Console + fetch() relay to Clawmetheus.
-    
-    Flow:
-    1. Open DevTools Console (if not already open)
-    2. Wrap JS to POST results via fetch() to http://127.0.0.1:7331/dom-result
-    3. Paste the wrapped JS into Console, press Enter
-    4. Poll /dom-result/{request_id} for the result
-    
-    This approach NEVER touches the clipboard, so type_text() remains safe.
+    Execute JS via DevTools Console.
+
+    Primary: fetch() relay to Clawmetheus /dom-result (fast, no clipboard).
+    Fallback: clipboard relay when fetch() is blocked by CSP (e.g. grok.com).
     """
     import uuid
     _open_devtools()
 
     request_id = uuid.uuid4().hex[:12]
-    
-    # Wrap the user's JS to POST results to Clawmetheus via fetch()
-    # The fetch() call sends the result as JSON to /dom-result
+
+    # Primary: fetch() relay
     wrapped_js = (
         f'(async()=>{{try{{const _r=(()=>{{ return {js_code} }})();'
         f'await fetch("http://127.0.0.1:7331/dom-result",{{method:"POST",'
@@ -281,7 +275,6 @@ def _devtools_eval(js_code):
         f'console.error("dom-err",e)}}}})()'
     )
 
-    # Save and restore clipboard so we don't contaminate it
     old_clipboard = ""
     try:
         old_clipboard = pyperclip.paste()
@@ -290,36 +283,82 @@ def _devtools_eval(js_code):
 
     pyperclip.copy(wrapped_js)
     time.sleep(0.05)
-
-    # Clear any existing text in Console input, paste our JS, execute
     pyautogui.hotkey("ctrl", "a")
     time.sleep(0.05)
     pyautogui.hotkey("ctrl", "v")
     time.sleep(0.15)
     pyautogui.press("enter")
-
-    # Restore clipboard immediately — fetch() sends data to server, not clipboard
     time.sleep(0.1)
     try:
         pyperclip.copy(old_clipboard)
     except Exception:
         pass
 
-    # Poll Clawmetheus for the result (server blocks up to 10s)
+    # Poll for fetch() result
     try:
         import requests as _req
         r = _req.get(f"http://127.0.0.1:7331/dom-result/{request_id}", timeout=12)
         if r.status_code == 200:
             return r.json().get("data")
         elif r.status_code == 408:
-            raise TimeoutError("DevTools eval timed out (no response from browser)")
+            print("[web/devtools] fetch blocked by CSP, using clipboard fallback", flush=True)
+            return _devtools_eval_clipboard(js_code)
         else:
             return None
     except TimeoutError:
-        raise
+        print("[web/devtools] fetch timed out, using clipboard fallback", flush=True)
+        return _devtools_eval_clipboard(js_code)
     except Exception as e:
-        print(f"[web/devtools] fetch relay error: {e}", flush=True)
-        return None
+        print(f"[web/devtools] fetch error: {e}, using clipboard fallback", flush=True)
+        return _devtools_eval_clipboard(js_code)
+
+
+def _devtools_eval_clipboard(js_code):
+    """
+    Fallback: execute JS via DevTools Console, relay result through clipboard.
+    Used when fetch() to localhost is blocked by CSP (e.g. grok.com, x.com).
+    Uses DevTools copy() utility function which is always available.
+    """
+    import json as _json
+
+    clipboard_js = (
+        f'(()=>{{try{{const _r=(()=>{{ return {js_code} }})();'
+        f'copy(JSON.stringify(_r));console.log("clipboard-ok")'
+        f'}}catch(e){{copy(JSON.stringify(null));console.error("clipboard-err",e)}}}})() '
+    )
+
+    sentinel = "__DEVTOOLS_PENDING__"
+    pyperclip.copy(sentinel)
+    time.sleep(0.05)
+
+    pyperclip.copy(clipboard_js)
+    time.sleep(0.05)
+    pyautogui.hotkey("ctrl", "a")
+    time.sleep(0.05)
+    pyautogui.hotkey("ctrl", "v")
+    time.sleep(0.15)
+    pyautogui.press("enter")
+
+    # Wait for copy() to update clipboard
+    deadline = time.time() + 8
+    time.sleep(0.5)
+    while time.time() < deadline:
+        try:
+            clip = pyperclip.paste()
+            if clip and clip != sentinel and clip != clipboard_js:
+                try:
+                    result = _json.loads(clip)
+                    print("[web/devtools] clipboard fallback OK", flush=True)
+                    return result
+                except (_json.JSONDecodeError, ValueError):
+                    pass
+        except Exception:
+            pass
+        time.sleep(0.3)
+
+    print("[web/devtools] clipboard fallback timed out", flush=True)
+    raise TimeoutError("DevTools eval timed out (fetch blocked by CSP, clipboard fallback failed)")
+
 
 
 def _devtools_viewport_offset():
