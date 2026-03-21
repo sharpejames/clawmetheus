@@ -1,6 +1,7 @@
-"""
-Moondream 2 — fully local vision backend via Hugging Face Transformers.
-No API key required. Runs on GPU (CUDA) with ~2GB VRAM.
+﻿"""
+Qwen2.5-VL -- fully local vision backend via Hugging Face Transformers.
+Replaces Moondream 2. Runs on GPU (CUDA) with ~3-4GB VRAM (3B model).
+No API key required.
 """
 import io
 import base64
@@ -14,64 +15,103 @@ from PIL import Image
 logger = logging.getLogger(__name__)
 
 _model = None
+_processor = None
+
+MODEL_ID = "Qwen/Qwen2.5-VL-3B-Instruct"
 
 
 def _get_model():
-    global _model
+    global _model, _processor
     if _model is None:
-        from transformers import AutoModelForCausalLM
+        from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 
-        logger.info("Loading Moondream 2 locally (this may download ~2GB on first run)...")
-        _model = AutoModelForCausalLM.from_pretrained(
-            "vikhyatk/moondream2",
-            trust_remote_code=True,
-            dtype=torch.bfloat16,
+        logger.info(f"Loading {MODEL_ID} in bfloat16...")
+
+        _model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.bfloat16,
             device_map="cuda",
         )
-        logger.info("Moondream 2 loaded on CUDA.")
-    return _model
+        _processor = AutoProcessor.from_pretrained(
+            MODEL_ID,
+            min_pixels=256 * 28 * 28,
+            max_pixels=1024 * 28 * 28,
+        )
+        mem = torch.cuda.memory_allocated() / 1024**3
+        logger.info(f"{MODEL_ID} loaded on CUDA. GPU mem: {mem:.1f} GB")
+    return _model, _processor
 
 
 def _load_image(b64: str) -> Image.Image:
-    return Image.open(io.BytesIO(base64.b64decode(b64)))
+    return Image.open(io.BytesIO(base64.b64decode(b64))).convert("RGB")
+
+
+def _chat(image: Image.Image, prompt: str, max_tokens: int = 1024) -> str:
+    """Run a single-turn chat with Qwen2.5-VL given an image and text prompt."""
+    model, processor = _get_model()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image", "image": image},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+
+    from qwen_vl_utils import process_vision_info
+    image_inputs, video_inputs = process_vision_info(messages)
+
+    inputs = processor(
+        text=[text],
+        images=image_inputs,
+        videos=video_inputs,
+        padding=True,
+        return_tensors="pt",
+    ).to(model.device)
+
+    with torch.no_grad():
+        ids = model.generate(**inputs, max_new_tokens=max_tokens, do_sample=False)
+
+    generated = ids[:, inputs.input_ids.shape[1]:]
+    return processor.batch_decode(generated, skip_special_tokens=True)[0].strip()
 
 
 def ask(image_b64: str, question: str) -> str:
     """Answer a free-form question about the screenshot."""
-    model = _get_model()
     img = _load_image(image_b64)
-    result = model.query(img, question)
-    return result.get("answer", "")
+    return _chat(img, question, max_tokens=512)
 
 
 def perceive(image_b64: str, scale: float, task: str = "") -> dict:
     """
-    Structured element map using Moondream query(). Replaces Gemini /perceive.
-    Coordinates are scaled back to actual screen pixels.
+    Structured element map. Coordinates are scaled back to actual screen pixels.
     """
-    model = _get_model()
     img = _load_image(image_b64)
 
-    prompt = """\
-Analyze this UI screenshot. Return ONLY a JSON object, no markdown, no explanation.
-List every interactive element visible: buttons, tools, icons, menus, tabs, inputs, color swatches, checkboxes, dropdowns, scrollbars, canvas areas.
-
-{
-  "title": "window title or app name",
-  "focused": "active element description",
-  "elements": [
-    {"type": "button|input|menu|icon|checkbox|dropdown|tab|link|tool|color|area|other", "label": "short descriptive label", "x": cx, "y": cy, "w": w, "h": h}
-  ]
-}
-
-x, y are the CENTER of the element. w, h are its dimensions. All values are integers in image pixels.
-Include every clickable element. Up to 75 elements."""
-
+    prompt = (
+        "Analyze this UI screenshot. Return ONLY a JSON object, no markdown, no explanation.\n"
+        "List every interactive element visible: buttons, tools, icons, menus, tabs, inputs, "
+        "color swatches, checkboxes, dropdowns, scrollbars, canvas areas.\n"
+        '{\n'
+        '  "title": "window title or app name",\n'
+        '  "focused": "active element description",\n'
+        '  "elements": [\n'
+        '    {"type": "button|input|menu|icon|checkbox|dropdown|tab|link|tool|color|area|other", '
+        '"label": "short descriptive label", "x": cx, "y": cy, "w": w, "h": h}\n'
+        '  ]\n'
+        '}\n\n'
+        "x, y are the CENTER of the element. w, h are its dimensions. "
+        "All values are integers in image pixels.\n"
+        "Include every clickable element. Up to 75 elements."
+    )
     if task:
         prompt = f"Task context: {task}\n\n" + prompt
 
-    result = model.query(img, prompt)
-    raw = result.get("answer", "")
+    raw = _chat(img, prompt, max_tokens=2048)
 
     start = raw.find('{')
     end = raw.rfind('}') + 1
@@ -97,21 +137,32 @@ Include every clickable element. Up to 75 elements."""
 def point(image_b64: str, target: str, scale: float = 0.5) -> tuple[int, int]:
     """
     Find a UI element by description. Returns (x, y) in actual screen coords.
-    Uses Moondream's native point() which returns normalized coords.
     Returns (0, 0) if not found.
     """
-    model = _get_model()
     img = _load_image(image_b64)
     w, h = img.size
     inv = 1.0 / scale
 
-    result = model.point(img, target)
-    points = result.get("points", [])
-    if not points:
-        logger.debug(f"Moondream point: '{target}' not found")
+    prompt = (
+        f"Find the UI element: '{target}'\n"
+        f"The image is {w}x{h} pixels.\n"
+        "Return ONLY the center coordinates as: x,y\n"
+        "Example: 350,120\n"
+        "If the element is not visible, return: 0,0"
+    )
+
+    raw = _chat(img, prompt, max_tokens=32)
+
+    m = re.search(r'(\d+)\s*,\s*(\d+)', raw)
+    if not m:
+        logger.debug(f"Qwen point: '{target}' not found in response: {raw[:100]}")
         return 0, 0
 
-    x = round(points[0]["x"] * w * inv)
-    y = round(points[0]["y"] * h * inv)
-    logger.debug(f"Moondream point: '{target}' → ({x}, {y})")
+    px, py = int(m.group(1)), int(m.group(2))
+    if px == 0 and py == 0:
+        return 0, 0
+
+    x = round(px * inv)
+    y = round(py * inv)
+    logger.debug(f"Qwen point: '{target}' -> ({x}, {y})")
     return x, y
