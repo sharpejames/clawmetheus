@@ -1,6 +1,6 @@
 ﻿"""
 Qwen2.5-VL -- fully local vision backend via Hugging Face Transformers.
-Replaces Moondream 2. Runs on GPU (CUDA) with ~3-4GB VRAM (3B model).
+Replaces Moondream 2. Runs on GPU (CUDA) with ~2GB VRAM (3B model, 4-bit NF4 quantized).
 No API key required.
 """
 import io
@@ -25,11 +25,17 @@ def _get_model():
     if _model is None:
         from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 
-        logger.info(f"Loading {MODEL_ID} in bfloat16...")
+        from transformers import BitsAndBytesConfig
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+        )
+        logger.info(f"Loading {MODEL_ID} in 4-bit (NF4)...")
 
         _model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
             MODEL_ID,
-            torch_dtype=torch.bfloat16,
+            quantization_config=bnb_config,
             device_map="cuda",
         )
         _processor = AutoProcessor.from_pretrained(
@@ -166,3 +172,5 @@ def point(image_b64: str, target: str, scale: float = 0.5) -> tuple[int, int]:
     y = round(py * inv)
     logger.debug(f"Qwen point: '{target}' -> ({x}, {y})")
     return x, y
+
+
